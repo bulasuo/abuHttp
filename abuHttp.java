@@ -8,6 +8,10 @@ import android.net.ConnectivityManager;
 import android.net.NetworkInfo;
 import android.widget.ImageView;
 
+import com.abu.healthandroidpad.util.disklrucache.DiskLruCache;
+
+import java.io.BufferedInputStream;
+import java.io.BufferedOutputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
 import java.io.File;
@@ -30,6 +34,8 @@ import java.util.concurrent.Executors;
  * @author 阿布
  * @date 2016-4-13 下午2:12:06
  * 子线程应该在空闲时对cup资源让步
+ * CacheManager.getDiskLruCache(activity.getApplicationContext(), "bitmap").flush();//不应该常用,应该在activity.onPause()里用
+ * 图片加载逻辑步骤: 运存里有资源否 - 硬盘有资源否 ; 加载到硬盘 - 显示到UI - 保存到运存
  */
 public class abuHttp {
 
@@ -43,10 +49,15 @@ public class abuHttp {
 
 	private static ExecutorService getThreadPool(){
 		if(mExecutorService == null)
-			mExecutorService = Executors.newFixedThreadPool(5);//线程池里最多5个线程处理任务,多余的任务会阻塞
+			mExecutorService = Executors.newFixedThreadPool(10);//线程池里最多10个线程处理任务,多余的任务会阻塞
 		return mExecutorService;
 	}
 
+	/**
+	 *@author   abu   2016/5/16   21:55
+	 * 返回任务引用的 图片加载 推荐使用此方法 并且建议管理 这些加载的任务
+	 * 此处 运存里有资源否 - 硬盘有资源否 ; 加载到硬盘 - 显示到UI - 保存到运存
+	 */
 	public static Runnable LoadImage(final Activity activity, final String strUrl, final ImageView imageView){
 		Runnable r = new Runnable(){
 			private boolean tryStop = false;
@@ -64,20 +75,67 @@ public class abuHttp {
 				tryDestroy = true;
 			}
 
+			private void setView(final Bitmap bitmap){
+				if(!tryStop && !tryDestroy && activity != null)
+					activity.runOnUiThread(new Runnable() {
+						@Override
+						public void run() {
+							imageView.setImageBitmap(bitmap);
+						}
+					});
+			}
+
 			@Override
 			public void run() {
+				Bitmap bitmap;
 				try {
+					//运存里有资源否
+					if((bitmap = CacheManager.getBitmapFromLruCache(strUrl)) != null){
+						setView(bitmap);
+						return;
+					}
+
+					//硬盘有资源否
+					String key = CacheManager.str2md5(strUrl);
+					DiskLruCache.Snapshot snapShot = CacheManager.getDiskLruCache(activity.getApplicationContext(), "bitmap")
+							                                           .get(key);
+					if(snapShot != null && (bitmap = BitmapFactory.decodeStream(snapShot.getInputStream(0))) != null){
+						setView(bitmap);
+						return;
+					}
+
+					//加载到硬盘
+					DiskLruCache.Editor editor = CacheManager.getDiskLruCache(activity.getApplicationContext(), "bitmap")
+																.edit(CacheManager.str2md5(strUrl));
+					if (editor != null) {
+						OutputStream outputStream = editor.newOutputStream(0);
+						if (downloadUrlToStream(strUrl, outputStream)) {
+							editor.commit();
+						} else {
+							editor.abort();
+						}
+						CacheManager.getDiskLruCache(activity.getApplicationContext(), "bitmap").flush();//不应该常用,应该在activity.onPause()里用
+
+						//显示到UI
+						snapShot = null;
+						bitmap = null;
+						snapShot = CacheManager.getDiskLruCache(activity.getApplicationContext(), "bitmap")
+								.get(key);
+						if(snapShot != null && (bitmap = BitmapFactory.decodeStream(snapShot.getInputStream(0))) != null){
+							setView(bitmap);
+
+							//保存到运存
+							CacheManager.addBitmapToLruCache(strUrl, bitmap);
+							return;
+						}
+					}
+
+
 					URL url = new URL(strUrl);
 					HttpURLConnection conn = (HttpURLConnection) url.openConnection();
 					InputStream inputStream = conn.getInputStream();
-					final Bitmap bitmap = BitmapFactory.decodeStream(inputStream);
-					if(!tryStop && !tryDestroy && activity != null)
-						activity.runOnUiThread(new Runnable() {
-							@Override
-							public void run() {
-								imageView.setImageBitmap(bitmap);
-							}
-						});
+					bitmap = BitmapFactory.decodeStream(inputStream);
+					setView(bitmap);
 
 				} catch (IOException e) {
 					e.printStackTrace();
@@ -90,9 +148,44 @@ public class abuHttp {
 		return r;
 	}
 
+	private static boolean downloadUrlToStream(String urlString, OutputStream outputStream) {
+		HttpURLConnection urlConnection = null;
+		BufferedOutputStream out = null;
+		BufferedInputStream in = null;
+		try {
+			final URL url = new URL(urlString);
+			urlConnection = (HttpURLConnection) url.openConnection();
+			in = new BufferedInputStream(urlConnection.getInputStream(), 8 * 1024);
+			out = new BufferedOutputStream(outputStream, 8 * 1024);
+			int b;
+			while ((b = in.read()) != -1) {
+				out.write(b);
+			}
+			return true;
+		} catch (final IOException e) {
+			e.printStackTrace();
+		} finally {
+			if (urlConnection != null) {
+				urlConnection.disconnect();
+			}
+			try {
+				if (out != null) {
+					out.close();
+				}
+				if (in != null) {
+					in.close();
+				}
+			} catch (final IOException e) {
+				e.printStackTrace();
+			}
+		}
+		return false;
+	}
+
 	/**
 	 *@author   abu   2016/4/19   1:05
 	 * 简单图片加载
+	 * 不推荐使用
 	 */
 	public static class LoadImageThread extends Thread{
 
