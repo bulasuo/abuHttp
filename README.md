@@ -3,7 +3,9 @@ abuHttp,集成web请求,文件上传,图片加载,文件下载,文件硬盘缓�
 集成DiskLruCache(硬盘缓存) 和 LruCache(运存缓存) 
 
 关于DiskLruCache: http://www.mobile-open.com/2014/3104.html;http://www.mobile-open.com/2015/77513.html
-
+DiskLruCache-gitHub  :  https://github.com/JakeWharton/DiskLruCache
+可以下载jar包 也可以AS关联 Gradle:compile 'com.jakewharton:disklrucache:2.0.2'
+我这边直接用源码了方便随时看源码^-^
 
 /**---abuHttp.java
  * @author 阿布
